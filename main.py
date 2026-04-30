@@ -64,7 +64,32 @@ if uploaded_file:
         )
 
     # =========================
-    # ③ Learning 高 CTR
+    # ③ Authorization needed 达人统计
+    # =========================
+    auth_needed = zero_orders[
+        zero_orders['Status'].astype(str).str.strip() == 'Authorization needed'
+    ]
+
+    if not auth_needed.empty:
+        auth_summary = (
+            auth_needed
+            .groupby('TikTok account')[['SKU orders']]
+            .sum()
+            .reset_index()
+            .sort_values(by='SKU orders', ascending=False)
+        )
+
+        st.subheader('=== Authorization needed 达人统计 ===')
+        st.dataframe(auth_summary)
+
+        st.download_button(
+            '下载Authorization needed达人统计',
+            to_excel_bytes(auth_summary),
+            file_name='auth_needed_summary.xlsx'
+        )
+
+    # =========================
+    # ④ Learning 高 CTR
     # =========================
     def norm_ctr(x):
         try:
