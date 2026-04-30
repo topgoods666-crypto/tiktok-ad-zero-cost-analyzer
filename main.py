@@ -47,90 +47,96 @@ def get_recommendation(row):
     return '普通素材｜暂不处理'
 
 if uploaded_file:
-    df = pd.read_excel(uploaded_file, sheet_name=0)
-    df.columns = df.columns.str.strip()
+    try:
+        df = pd.read_excel(uploaded_file, sheet_name=0)
+        df.columns = df.columns.str.strip()
 
-    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
-    if missing:
-        st.error(f'缺少必要列: {missing}')
-    else:
-        df['Cost'] = pd.to_numeric(df['Cost'], errors='coerce').fillna(0)
-        df['SKU orders'] = pd.to_numeric(df['SKU orders'], errors='coerce').fillna(0)
-        df['CTR'] = df['Product ad click rate'].apply(norm_ctr)
+        missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+        if missing:
+            st.error(f'缺少必要列: {missing}')
+        else:
+            df['Cost'] = pd.to_numeric(df['Cost'], errors='coerce').fillna(0)
+            df['SKU orders'] = pd.to_numeric(df['SKU orders'], errors='coerce').fillna(0)
+            df['CTR'] = df['Product ad click rate'].apply(norm_ctr)
 
-        zero_orders = df[(df['Cost'] == 0) & (df['SKU orders'] > 0)]
-        unavailable = zero_orders[zero_orders['Status'].astype(str).str.strip() == 'Unavailable']
-        auth_needed = zero_orders[zero_orders['Status'].astype(str).str.strip() == 'Authorization needed']
-        learning = df[(df['Status'] == 'Learning') & (df['CTR'] > 0.03)]
-        contact_creators = zero_orders[
-            zero_orders['Status'].astype(str).str.strip().isin(['Unavailable', 'Authorization needed'])
-        ]
+            zero_orders = df[(df['Cost'] == 0) & (df['SKU orders'] > 0)]
+            unavailable = zero_orders[zero_orders['Status'].astype(str).str.strip() == 'Unavailable']
+            auth_needed = zero_orders[zero_orders['Status'].astype(str).str.strip() == 'Authorization needed']
+            learning = df[(df['Status'] == 'Learning') & (df['CTR'] > 0.03)]
+            contact_creators = zero_orders[
+                zero_orders['Status'].astype(str).str.strip().isin(['Unavailable', 'Authorization needed'])
+            ]
 
-        # ========== 核心指标卡片 ==========
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric('0消耗出单素材', len(zero_orders))
-        c2.metric('0消耗总订单', int(zero_orders['SKU orders'].sum()))
-        c3.metric('Learning高CTR素材', len(learning))
-        c4.metric('需联系达人数', contact_creators['TikTok account'].nunique())
+            # ========== 核心指标卡片 ==========
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric('0消耗出单素材', len(zero_orders))
+            c2.metric('0消耗总订单', int(zero_orders['SKU orders'].sum()))
+            c3.metric('Learning高CTR素材', len(learning))
+            c4.metric('需联系达人数', contact_creators['TikTok account'].nunique())
 
-        st.divider()
+            st.divider()
 
-        # ========== ① 0消耗出单素材 ==========
-        st.subheader('=== 0消耗出单素材 ===')
-        st.write(f'共 {len(zero_orders)} 条')
-        zero_display = zero_orders[['Video ID', 'SKU orders', 'Status']]
-        st.dataframe(zero_display)
-        st.download_button('下载0消耗出单素材', to_excel_bytes(zero_display), file_name='zero_cost_orders.xlsx')
+            # ========== ① 0消耗出单素材 ==========
+            st.subheader('=== 0消耗出单素材 ===')
+            st.write(f'共 {len(zero_orders)} 条')
+            zero_display = zero_orders[['Video ID', 'SKU orders', 'Status']]
+            st.dataframe(zero_display)
+            st.download_button('下载0消耗出单素材', to_excel_bytes(zero_display), file_name='zero_cost_orders.xlsx')
 
-        # ========== ② Unavailable 达人统计 ==========
-        if not unavailable.empty:
-            unavailable_summary = (
-                unavailable.groupby('TikTok account')[['SKU orders']]
-                .sum().reset_index()
-                .sort_values(by='SKU orders', ascending=False)
-            )
-            st.subheader('=== Unavailable 达人统计 ===')
-            st.dataframe(unavailable_summary)
-            st.download_button('下载Unavailable达人统计', to_excel_bytes(unavailable_summary), file_name='unavailable_summary.xlsx')
-
-        # ========== ③ Authorization needed 达人统计 ==========
-        if not auth_needed.empty:
-            auth_summary = (
-                auth_needed.groupby('TikTok account')[['SKU orders']]
-                .sum().reset_index()
-                .sort_values(by='SKU orders', ascending=False)
-            )
-            st.subheader('=== Authorization needed 达人统计 ===')
-            st.dataframe(auth_summary)
-            st.download_button('下载Authorization needed达人统计', to_excel_bytes(auth_summary), file_name='auth_needed_summary.xlsx')
-
-        # ========== ④ Learning 高CTR素材 ==========
-        st.subheader('=== Learning 高CTR素材 ===')
-        st.write(f'共 {len(learning)} 条')
-        learning_display = learning[['Video ID', 'Cost', 'Product ad click rate', 'SKU orders']]
-        st.dataframe(learning_display)
-        st.download_button('下载Learning高CTR素材', to_excel_bytes(learning_display), file_name='learning_high_ctr.xlsx')
-
-        # ========== ⑤ 投放建议总表 ==========
-        df['Recommendation'] = df.apply(get_recommendation, axis=1)
-        st.subheader('=== 投放建议总表 ===')
-        rec_display = df[['Video ID', 'Cost', 'Product ad click rate', 'SKU orders', 'Status', 'TikTok account', 'Recommendation']]
-        st.dataframe(rec_display)
-        st.download_button('下载投放建议总表', to_excel_bytes(rec_display), file_name='recommendation_table.xlsx')
-
-        # ========== ⑥ 优先联系达人名单 ==========
-        if not contact_creators.empty:
-            creator_list = (
-                contact_creators.groupby('TikTok account')
-                .agg(
-                    Total_SKU_orders=('SKU orders', 'sum'),
-                    Video_count=('Video ID', 'count'),
-                    Status_list=('Status', lambda x: ', '.join(sorted(set(x.astype(str).str.strip()))))
+            # ========== ② Unavailable 达人统计 ==========
+            if not unavailable.empty:
+                unavailable_summary = (
+                    unavailable.groupby('TikTok account')[['SKU orders']]
+                    .sum().reset_index()
+                    .sort_values(by='SKU orders', ascending=False)
                 )
-                .reset_index()
-                .sort_values(by='Total_SKU_orders', ascending=False)
-            )
-            st.subheader('=== 优先联系达人名单 ===')
-            st.write(f'共 {len(creator_list)} 位达人')
-            st.dataframe(creator_list)
-            st.download_button('下载优先联系达人名单', to_excel_bytes(creator_list), file_name='priority_creators.xlsx')
+                st.subheader('=== Unavailable 达人统计 ===')
+                st.dataframe(unavailable_summary)
+                st.download_button('下载Unavailable达人统计', to_excel_bytes(unavailable_summary), file_name='unavailable_summary.xlsx')
+
+            # ========== ③ Authorization needed 达人统计 ==========
+            if not auth_needed.empty:
+                auth_summary = (
+                    auth_needed.groupby('TikTok account')[['SKU orders']]
+                    .sum().reset_index()
+                    .sort_values(by='SKU orders', ascending=False)
+                )
+                st.subheader('=== Authorization needed 达人统计 ===')
+                st.dataframe(auth_summary)
+                st.download_button('下载Authorization needed达人统计', to_excel_bytes(auth_summary), file_name='auth_needed_summary.xlsx')
+
+            # ========== ④ Learning 高CTR素材 ==========
+            st.subheader('=== Learning 高CTR素材 ===')
+            st.write(f'共 {len(learning)} 条')
+            learning_display = learning[['Video ID', 'Cost', 'Product ad click rate', 'SKU orders']]
+            st.dataframe(learning_display)
+            st.download_button('下载Learning高CTR素材', to_excel_bytes(learning_display), file_name='learning_high_ctr.xlsx')
+
+            # ========== ⑤ 投放建议总表 ==========
+            df['Recommendation'] = df.apply(get_recommendation, axis=1)
+            st.subheader('=== 投放建议总表 ===')
+            rec_display = df[['Video ID', 'Cost', 'Product ad click rate', 'SKU orders', 'Status', 'TikTok account', 'Recommendation']]
+            st.dataframe(rec_display)
+            st.download_button('下载投放建议总表', to_excel_bytes(rec_display), file_name='recommendation_table.xlsx')
+
+            # ========== ⑥ 优先联系达人名单 ==========
+            if not contact_creators.empty:
+                creator_list = (
+                    contact_creators.groupby('TikTok account')
+                    .agg(
+                        Total_SKU_orders=('SKU orders', 'sum'),
+                        Video_count=('Video ID', 'count'),
+                        Status_list=('Status', lambda x: ', '.join(sorted(set(x.astype(str).str.strip()))))
+                    )
+                    .reset_index()
+                    .sort_values(by='Total_SKU_orders', ascending=False)
+                )
+                st.subheader('=== 优先联系达人名单 ===')
+                st.write(f'共 {len(creator_list)} 位达人')
+                st.dataframe(creator_list)
+                st.download_button('下载优先联系达人名单', to_excel_bytes(creator_list), file_name='priority_creators.xlsx')
+            else:
+                st.write("暂无需要联系的达人。")
+
+    except Exception as e:
+        st.error(f"读取或分析 Excel 失败：{e}")
