@@ -2,75 +2,98 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-st.set_page_config(page_title="TikTok广告素材筛选工具", layout="wide")
-st.title("TikTok广告素材筛选工具")
+st.set_page_config(page_title='TikTok ad analyzer', layout='wide')
+st.title('TikTok广告素材筛选工具 - 最终版')
 
-REQUIRED_COLUMNS = ["Video ID", "Cost", "Product ad click rate", "SKU orders", "Status"]
-DISPLAY_COLUMNS = ["Video ID", "Cost", "Product ad click rate", "SKU orders"]
+uploaded_file = st.file_uploader('上传广告消耗Excel', type=['xlsx','xls'])
 
+def to_excel_bytes(df):
+    output = BytesIO()
+    df.to_excel(output, index=False)
+    output.seek(0)
+    return output
 
-def to_excel_bytes(df: pd.DataFrame) -> bytes:
-    buf = BytesIO()
-    df.to_excel(buf, index=False, engine="openpyxl")
-    buf.seek(0)
-    return buf.getvalue()
-
-
-uploaded = st.file_uploader("上传 Excel 文件", type=["xlsx", "xls"])
-
-if uploaded is not None:
-    df = pd.read_excel(uploaded, sheet_name=0, engine="openpyxl")
+if uploaded_file:
+    df = pd.read_excel(uploaded_file, sheet_name=0)
     df.columns = df.columns.str.strip()
 
-    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
-    if missing:
-        st.error(f"Excel 缺少以下必要列：{', '.join(missing)}")
-        st.info(f"当前文件包含的列：{', '.join(df.columns.tolist())}")
-        st.stop()
+    # 转换数值
+    df['Cost'] = pd.to_numeric(df['Cost'], errors='coerce').fillna(0)
+    df['SKU orders'] = pd.to_numeric(df['SKU orders'], errors='coerce').fillna(0)
 
-    df["Cost"] = pd.to_numeric(df["Cost"], errors="coerce").fillna(0)
-    df["SKU orders"] = pd.to_numeric(df["SKU orders"], errors="coerce").fillna(0)
-    df["Product ad click rate"] = pd.to_numeric(
-        df["Product ad click rate"].astype(str).str.rstrip("%"),
-        errors="coerce",
-    ).fillna(0)
+    # =========================
+    # ① 0消耗出单素材
+    # =========================
+    zero_orders = df[(df['Cost'] == 0) & (df['SKU orders'] > 0)]
 
-    max_ctr = df["Product ad click rate"].max()
-    if max_ctr > 1:
-        df["Product ad click rate"] = df["Product ad click rate"] / 100
+    st.subheader('=== 0消耗出单素材 ===')
+    st.write(f'共 {len(zero_orders)} 条')
 
-    df["Status"] = df["Status"].astype(str).str.strip()
+    zero_display = zero_orders[['Video ID','SKU orders','Status']]
+    st.dataframe(zero_display)
 
-    st.markdown("---")
+    st.download_button(
+        '下载0消耗出单素材',
+        to_excel_bytes(zero_display),
+        file_name='zero_cost_orders.xlsx'
+    )
 
-    # ---- 结果区一 ----
-    st.subheader("【0消耗但有出单的素材】")
-    r1 = df[(df["Cost"] == 0) & (df["SKU orders"] > 0)][DISPLAY_COLUMNS].reset_index(drop=True)
-    st.write(f"符合条件的素材数量：**{len(r1)}**")
-    if r1.empty:
-        st.info("没有符合条件的素材。")
-    else:
-        st.dataframe(r1, use_container_width=True)
-        st.download_button(
-            label="下载结果 Excel",
-            data=to_excel_bytes(r1),
-            file_name="0消耗有出单素材.xlsx",
-            key="dl_r1",
+    # =========================
+    # ② Unavailable 达人统计
+    # =========================
+    unavailable = zero_orders[
+        zero_orders['Status'].astype(str).str.strip() == 'Unavailable'
+    ]
+
+    if not unavailable.empty:
+        unavailable_summary = (
+            unavailable
+            .groupby('TikTok account')[['SKU orders']]
+            .sum()
+            .reset_index()
+            .sort_values(by='SKU orders', ascending=False)
         )
 
-    st.markdown("---")
+        st.subheader('=== Unavailable 达人统计 ===')
+        st.dataframe(unavailable_summary)
 
-    # ---- 结果区二 ----
-    st.subheader("【Learning状态且CTR大于3%的素材】")
-    r2 = df[(df["Status"] == "Learning") & (df["Product ad click rate"] > 0.03)][DISPLAY_COLUMNS].reset_index(drop=True)
-    st.write(f"符合条件的素材数量：**{len(r2)}**")
-    if r2.empty:
-        st.info("没有符合条件的素材。")
-    else:
-        st.dataframe(r2, use_container_width=True)
         st.download_button(
-            label="下载结果 Excel",
-            data=to_excel_bytes(r2),
-            file_name="Learning高CTR素材.xlsx",
-            key="dl_r2",
+            '下载Unavailable达人统计',
+            to_excel_bytes(unavailable_summary),
+            file_name='unavailable_summary.xlsx'
         )
+
+    # =========================
+    # ③ Learning 高 CTR
+    # =========================
+    def norm_ctr(x):
+        try:
+            x = str(x).replace('%','').strip()
+            val = float(x)
+            if val > 1:
+                val = val / 100
+            return val
+        except:
+            return 0
+
+    df['CTR'] = df['Product ad click rate'].apply(norm_ctr)
+
+    learning = df[
+        (df['Status'] == 'Learning') &
+        (df['CTR'] > 0.03)
+    ]
+
+    st.subheader('=== Learning 高CTR素材 ===')
+    st.write(f'共 {len(learning)} 条')
+
+    learning_display = learning[
+        ['Video ID','Cost','Product ad click rate','SKU orders']
+    ]
+
+    st.dataframe(learning_display)
+
+    st.download_button(
+        '下载Learning高CTR素材',
+        to_excel_bytes(learning_display),
+        file_name='learning_high_ctr.xlsx'
+    )
