@@ -48,12 +48,12 @@ def get_recommendation(row):
 
 
 def get_contact_info(g):
-    statuses = g['Status_clean'].dropna().astype(str).unique()
-    if 'Authorization needed' in statuses:
-        return '需授权｜优先联系'
-    if 'Unavailable' in statuses:
-        return '不可用｜检查合作状态'
-    return '其他'
+    if 'Contact info' in g.columns:
+        vals = g['Contact info'].dropna().astype(str).str.strip()
+        vals = vals[vals != '']
+        if not vals.empty:
+            return ', '.join(vals.unique())
+    return '表格未提供联系方式'
 
 
 if uploaded_file:
@@ -126,8 +126,10 @@ if uploaded_file:
             st.download_button('下载Learning高CTR素材', to_excel_bytes(learning_display), file_name='learning_high_ctr.xlsx')
             # ========== ⑤ 投放建议总表 ==========
             df['Recommendation'] = df.apply(get_recommendation, axis=1)
+            rec_filtered = df[df['Recommendation'] != '普通素材｜暂不处理']
             st.subheader('=== 投放建议总表 ===')
-            rec_display = df[['Video ID', 'Cost', 'Product ad click rate', 'SKU orders', 'Status', 'TikTok account', 'Recommendation']]
+            st.write(f'共 {len(rec_filtered)} 条（已过滤普通素材）')
+            rec_display = rec_filtered[['Video ID', 'Cost', 'Product ad click rate', 'SKU orders', 'Status', 'TikTok account', 'Recommendation']]
             st.dataframe(rec_display, use_container_width=True)
             st.download_button('下载投放建议总表', to_excel_bytes(rec_display), file_name='recommendation_table.xlsx')
 
