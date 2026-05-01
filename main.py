@@ -7,7 +7,7 @@ st.title('TikTok自动投流分析系统')
 
 uploaded_file = st.file_uploader('上传广告消耗Excel', type=['xlsx', 'xls'])
 
-REQUIRED_COLUMNS = ['Video ID', 'Cost', 'Product ad click rate', 'SKU orders', 'Status', 'TikTok account', 'Creative type', 'Campaign ID', 'Ad Set ID']
+REQUIRED_COLUMNS = ['Video ID', 'Cost', 'Product ad click rate', 'SKU orders', 'Status', 'TikTok account', 'Creative type', 'Campaign ID']
 
 
 def to_excel_bytes(df):
@@ -17,11 +17,27 @@ def to_excel_bytes(df):
         workbook = writer.book
         worksheet = writer.sheets['Sheet1']
         text_format = workbook.add_format({'num_format': '@'})
+        number_format = workbook.add_format({'num_format': '0.00'})
+        int_format = workbook.add_format({'num_format': '0'})
         for col_num, col_name in enumerate(df.columns):
             if col_name in ['Video ID', 'Campaign ID', 'Ad Set ID']:
-                worksheet.set_column(col_num, col_num, 20, text_format)
+                worksheet.set_column(col_num, col_num, 22, text_format)
+            elif col_name == 'Cost':
+                worksheet.set_column(col_num, col_num, 14, number_format)
+            elif col_name in ['SKU orders', 'Total SKU orders', 'Video count']:
+                worksheet.set_column(col_num, col_num, 14, int_format)
     output.seek(0)
     return output
+
+
+def clean_id_column(series):
+    """Clean ID columns: remove .0 suffix, strip whitespace, keep full digits."""
+    return (
+        series.astype(str)
+        .str.strip()
+        .str.replace(r'\.0$', '', regex=True)
+        .str.replace(r'\.0+$', '', regex=True)
+    )
 
 
 def norm_ctr(x):
@@ -63,18 +79,38 @@ def get_contact_info(g):
     return '表格未提供联系方式'
 
 
+def format_display_df(df):
+    """Format dataframe for streamlit display: full numbers, no scientific notation."""
+    out = df.copy()
+    for col in out.columns:
+        if col in ['Video ID', 'Campaign ID', 'Ad Set ID']:
+            out[col] = out[col].astype(str)
+        elif col in ['SKU orders', 'Total SKU orders', 'Video count']:
+            out[col] = out[col].apply(lambda x: f'{int(x)}' if pd.notna(x) else '0')
+        elif col == 'Cost':
+            out[col] = out[col].apply(lambda x: f'{x:.2f}' if pd.notna(x) else '0.00')
+    return out
+
+
 if uploaded_file:
     try:
         df = pd.read_excel(uploaded_file, sheet_name=0, dtype={'Video ID': str, 'Campaign ID': str, 'Ad Set ID': str})
         df.columns = df.columns.str.strip()
 
+        # Auto-fill Ad Set ID from Campaign ID if missing
+        if 'Ad Set ID' not in df.columns:
+            if 'Campaign ID' in df.columns:
+                df['Ad Set ID'] = df['Campaign ID']
+            else:
+                df['Ad Set ID'] = ''
+
         missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
         if missing:
             st.error(f'缺少必要列: {missing}')
         else:
-            df['Video ID'] = df['Video ID'].astype(str)
-            df['Campaign ID'] = df['Campaign ID'].astype(str)
-            df['Ad Set ID'] = df['Ad Set ID'].astype(str)
+            df['Video ID'] = clean_id_column(df['Video ID'])
+            df['Campaign ID'] = clean_id_column(df['Campaign ID'])
+            df['Ad Set ID'] = clean_id_column(df['Ad Set ID'])
             df['Cost'] = pd.to_numeric(df['Cost'], errors='coerce').fillna(0)
             df['SKU orders'] = pd.to_numeric(df['SKU orders'], errors='coerce').fillna(0)
             df['CTR'] = df['Product ad click rate'].apply(norm_ctr)
@@ -103,7 +139,7 @@ if uploaded_file:
             st.subheader('=== 0消耗出单素材 ===')
             st.write(f'共 {len(zero_orders)} 条')
             zero_display = zero_orders[['Video ID', 'Campaign ID', 'Ad Set ID', 'SKU orders', 'Status']]
-            st.dataframe(zero_display, use_container_width=True)
+            st.dataframe(format_display_df(zero_display), use_container_width=True)
             st.download_button('下载0消耗出单素材', to_excel_bytes(zero_display), file_name='zero_cost_orders.xlsx')
 
             # ========== ② Unavailable 达人统计 ==========
@@ -114,7 +150,7 @@ if uploaded_file:
                     .sort_values(by='SKU orders', ascending=False)
                 )
                 st.subheader('=== Unavailable 达人统计 ===')
-                st.dataframe(unavailable_summary, use_container_width=True)
+                st.dataframe(format_display_df(unavailable_summary), use_container_width=True)
                 st.download_button('下载Unavailable达人统计', to_excel_bytes(unavailable_summary), file_name='unavailable_summary.xlsx')
 
             # ========== ③ Authorization needed 达人统计 ==========
@@ -125,22 +161,23 @@ if uploaded_file:
                     .sort_values(by='SKU orders', ascending=False)
                 )
                 st.subheader('=== Authorization needed 达人统计 ===')
-                st.dataframe(auth_summary, use_container_width=True)
+                st.dataframe(format_display_df(auth_summary), use_container_width=True)
                 st.download_button('下载Authorization needed达人统计', to_excel_bytes(auth_summary), file_name='auth_needed_summary.xlsx')
 
             # ========== ④ Learning 高CTR素材 ==========
             st.subheader('=== Learning 高CTR素材 ===')
             st.write(f'共 {len(learning)} 条')
             learning_display = learning[['Video ID', 'Campaign ID', 'Ad Set ID', 'Cost', 'Product ad click rate', 'SKU orders']]
-            st.dataframe(learning_display, use_container_width=True)
+            st.dataframe(format_display_df(learning_display), use_container_width=True)
             st.download_button('下载Learning高CTR素材', to_excel_bytes(learning_display), file_name='learning_high_ctr.xlsx')
+
             # ========== ⑤ 投放建议总表 ==========
             df['Recommendation'] = df.apply(get_recommendation, axis=1)
             rec_filtered = df[df['Recommendation'] != '普通素材｜暂不处理']
             st.subheader('=== 投放建议总表 ===')
             st.write(f'共 {len(rec_filtered)} 条（已过滤普通素材）')
             rec_display = rec_filtered[['Video ID', 'Campaign ID', 'Ad Set ID', 'Cost', 'Product ad click rate', 'SKU orders', 'Status', 'TikTok account', 'Recommendation']]
-            st.dataframe(rec_display, use_container_width=True)
+            st.dataframe(format_display_df(rec_display), use_container_width=True)
             st.download_button('下载投放建议总表', to_excel_bytes(rec_display), file_name='recommendation_table.xlsx')
 
             # ========== ⑥ 优先联系达人名单 ==========
@@ -158,7 +195,7 @@ if uploaded_file:
                 )
                 st.subheader('=== 优先联系达人名单 ===')
                 st.write(f'共 {len(contact_summary)} 位达人')
-                st.dataframe(contact_summary, use_container_width=True)
+                st.dataframe(format_display_df(contact_summary), use_container_width=True)
                 st.download_button('下载优先联系达人名单', to_excel_bytes(contact_summary), file_name='priority_creator_contact_list.xlsx')
             else:
                 st.write("暂无需要联系的达人。")
